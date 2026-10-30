@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Data and model artifacts (keep folder structure only)
+data/raw/*
+data/processed/*
+data/external/*
+!data/**/.gitkeep
+ml/models/*
+!ml/models/.gitkeep
+*.h5
+*.keras
+*.tflite
+*.pt
+
+# Firmware build output
+firmware/build/
+firmware/.pio/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
