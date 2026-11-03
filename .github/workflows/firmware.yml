@@ -1,0 +1,97 @@
+# Firmware deployment pipeline (Continuous Delivery, Farley style).
+#
+#   commit stage ──┬── unit tests (host, no hardware)
+#                  ├── static analysis (cppcheck)
+#                  └── build ONCE ──> versioned artifact (firmware.bin + sha256)
+#
+# Later stages (hardware-in-the-loop, staged OTA) download this exact artifact
+# instead of rebuilding, so what was tested is what ships.
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: firmware
+
+env:
+  PLATFORMIO_VERSION: "6.2.0"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-native-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: Host unit tests
+        run: pio test -e native
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-esp32s3-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: cppcheck
+        run: pio check -e esp32-s3 --fail-on-defect=medium
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-esp32s3-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: Build ESP32-S3 firmware
+        run: pio run -e esp32-s3
+      - name: Package artifact
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          cp .pio/build/esp32-s3/firmware.bin .pio/build/esp32-s3/bootloader.bin \
+             .pio/build/esp32-s3/partitions.bin dist/
+          (cd dist && sha256sum ./*.bin > SHA256SUMS)
+          printf '{"git_sha":"%s","board":"esp32-s3-devkitc-1","env":"esp32-s3"}\n' \
+            "$GIT_SHA" > dist/build-info.json
+          pio run -e esp32-s3 -t size | tail -n 5 | tee dist/size.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32-s3-${{ github.sha }}
+          path: firmware/dist/
+          retention-days: 30
+          if-no-files-found: error

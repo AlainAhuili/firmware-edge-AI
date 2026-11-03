@@ -20,6 +20,7 @@ ml/models/*
 # Firmware build output
 firmware/build/
 firmware/.pio/
+firmware/dist/
 
 # OS / editor
 .DS_Store
