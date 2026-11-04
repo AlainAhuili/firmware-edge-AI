@@ -95,6 +95,7 @@ jobs:
           printf '{"git_sha":"%s","board":"esp32-s3-devkitc-1","env":"esp32-s3"}\n' \
             "$GIT_SHA" > dist/build-info.json
           tail -n 5 size-full.txt > dist/size.txt
+          pio pkg list -e esp32-s3 > dist/packages.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: firmware-esp32-s3-${{ github.sha }}
