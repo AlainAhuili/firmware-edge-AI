@@ -6,6 +6,9 @@
 #
 # Later stages (hardware-in-the-loop, staged OTA) download this exact artifact
 # instead of rebuilding, so what was tested is what ships.
+#
+# Everything that decides the binary is pinned: runner image (ubuntu-24.04), actions (commit
+# SHAs), PlatformIO, platform and packages. Bump any of them on purpose, in its own PR.
 name: firmware
 
 on:
@@ -19,9 +22,11 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on PRs only. On main every commit must finish its pipeline,
+# or a quick second push would leave the first commit without a verified artifact.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # `shell: bash` runs with -eo pipefail; GitHub's implicit default is `bash -e` only, so a
 # failing command on the left of a pipe would pass silently.
@@ -35,14 +40,14 @@ env:
 
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.platformio
           key: pio-native-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
@@ -51,14 +56,14 @@ jobs:
         run: pio test -e native
 
   static-analysis:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.platformio
           key: pio-check-esp32s3-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
@@ -69,14 +74,14 @@ jobs:
   # Only a commit that passed its tests and static analysis gets a versioned artifact.
   build:
     needs: [unit-tests, static-analysis]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.platformio
           key: pio-build-esp32s3-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
@@ -98,7 +103,7 @@ jobs:
             "$GIT_SHA" > dist/build-info.json
           tail -n 5 size-full.txt > dist/size.txt
           pio pkg list -e esp32-s3 > dist/packages.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: firmware-esp32-s3-${{ github.sha }}
           path: firmware/dist/
