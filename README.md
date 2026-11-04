@@ -24,3 +24,43 @@ jupyter lab
 ```
 
 Pick the **Python (edge-ai)** kernel in Jupyter.
+
+## Firmware (ESP32-S3-DevKitC-1 N16R8)
+
+PlatformIO project in `firmware/`. Logic lives in `firmware/lib/` so it can be unit
+tested on the host; `firmware/src/` is the thin hardware layer.
+
+```powershell
+pip install platformio
+cd firmware
+pio test -e native        # host unit tests, no board needed
+pio check -e esp32-s3     # static analysis (cppcheck)
+pio run -e esp32-s3       # build
+pio run -e esp32-s3 -t upload; pio device monitor
+```
+
+## Deployment pipeline
+
+`.github/workflows/firmware.yml` is the commit stage: host unit tests, static
+analysis and a single build run on every PR that touches `firmware/`. The build
+produces one versioned artifact (`firmware-esp32-s3-<sha>`: binaries, `SHA256SUMS`,
+`build-info.json`, size report). Later stages (hardware-in-the-loop, staged OTA)
+promote that exact artifact instead of rebuilding.
+
+## AI review (advisory)
+
+Every PR from this repository gets one comment from the
+[Dev Growth Copilot](https://github.com/AlainAhuili/dev-growth-copilot) reviewer
+(`.github/workflows/ai-review.yml`). It asks questions instead of giving fixes and never
+blocks a merge. The only failing check is the deterministic guard against text in the diff
+that addresses an AI reviewer.
+
+Setup: repository secret `ANTHROPIC_API_KEY`, and variable `COPILOT_REF` set to the
+dev-growth-copilot commit or tag to use (default `main`; pin it so reviewer changes reach
+this repo only when you choose). Each run uploads `review-findings`; import it into your
+local skill map:
+
+```powershell
+python -m skillmap.ingest findings.json
+python -m skillmap.report
+```

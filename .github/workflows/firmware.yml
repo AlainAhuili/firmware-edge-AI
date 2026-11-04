@@ -1,0 +1,111 @@
+# Firmware deployment pipeline (Continuous Delivery, Farley style).
+#
+#   commit stage ──┬── unit tests (host, no hardware) ──┐
+#                  └── static analysis (cppcheck) ──────┴── build ONCE ──> versioned artifact
+#                                                          (firmware.bin + sha256 + packages)
+#
+# Later stages (hardware-in-the-loop, staged OTA) download this exact artifact
+# instead of rebuilding, so what was tested is what ships.
+#
+# Everything that decides the binary is pinned: runner image (ubuntu-24.04), actions (commit
+# SHAs), PlatformIO, platform and packages. Bump any of them on purpose, in its own PR.
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on PRs only. On main every commit must finish its pipeline,
+# or a quick second push would leave the first commit without a verified artifact.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# `shell: bash` runs with -eo pipefail; GitHub's implicit default is `bash -e` only, so a
+# failing command on the left of a pipe would pass silently.
+defaults:
+  run:
+    shell: bash
+    working-directory: firmware
+
+env:
+  PLATFORMIO_VERSION: "6.2.0"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.platformio
+          key: pio-native-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: Host unit tests
+        run: pio test -e native
+
+  static-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.platformio
+          key: pio-check-esp32s3-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: cppcheck
+        run: pio check -e esp32-s3 --fail-on-defect=medium
+
+  # Only a commit that passed its tests and static analysis gets a versioned artifact.
+  build:
+    needs: [unit-tests, static-analysis]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.platformio
+          key: pio-build-esp32s3-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: Build ESP32-S3 firmware
+        run: pio run -e esp32-s3
+      # Size report first, from the same build, then copy exactly those binaries.
+      - name: Size report
+        run: pio run -e esp32-s3 -t size | tee size-full.txt
+      - name: Package artifact
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          cp .pio/build/esp32-s3/firmware.bin .pio/build/esp32-s3/bootloader.bin \
+             .pio/build/esp32-s3/partitions.bin dist/
+          (cd dist && sha256sum ./*.bin > SHA256SUMS)
+          printf '{"git_sha":"%s","board":"esp32-s3-devkitc-1","env":"esp32-s3"}\n' \
+            "$GIT_SHA" > dist/build-info.json
+          tail -n 5 size-full.txt > dist/size.txt
+          pio pkg list -e esp32-s3 > dist/packages.txt
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: firmware-esp32-s3-${{ github.sha }}
+          path: firmware/dist/
+          retention-days: 30
+          if-no-files-found: error
