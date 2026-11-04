@@ -1,8 +1,8 @@
 # Firmware deployment pipeline (Continuous Delivery, Farley style).
 #
-#   commit stage ──┬── unit tests (host, no hardware)
-#                  ├── static analysis (cppcheck)
-#                  └── build ONCE ──> versioned artifact (firmware.bin + sha256)
+#   commit stage ──┬── unit tests (host, no hardware) ──┐
+#                  └── static analysis (cppcheck) ──────┴── build ONCE ──> versioned artifact
+#                                                          (firmware.bin + sha256 + packages)
 #
 # Later stages (hardware-in-the-loop, staged OTA) download this exact artifact
 # instead of rebuilding, so what was tested is what ships.
@@ -66,7 +66,9 @@ jobs:
       - name: cppcheck
         run: pio check -e esp32-s3 --fail-on-defect=medium
 
+  # Only a commit that passed its tests and static analysis gets a versioned artifact.
   build:
+    needs: [unit-tests, static-analysis]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
