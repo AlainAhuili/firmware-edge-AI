@@ -1,17 +1,18 @@
 # Advisory AI review by Dev Growth Copilot (github.com/AlainAhuili/dev-growth-copilot).
 #
-#   review  (contents: read, has the API key)   -> findings.json + comment.md artifact
-#   comment (pull-requests: write, no key, no PR code) -> one PR comment, updated in place
+#   guard   (contents: read, no key, no model)  deterministic injection check, the only gate
+#   review  (contents: read; the key reaches only the review step) -> findings + comment
+#   comment (pull-requests: write, no key, no PR code)  one PR comment, updated in place
 #
-# The review never blocks a merge. The only failing check is the deterministic
-# prompt-injection guard (text in the diff addressed to an AI reviewer).
-# Same-repo PRs only: fork PRs get no secrets and no comment.
+# The guard runs on every PR and doesn't depend on the AI review: a missing key, a model
+# error or a fork PR can't switch it off. The review never blocks a merge.
 #
 # Settings needed in this repo:
-#   secret   ANTHROPIC_API_KEY  (without it the job is skipped with a notice)
+#   secret   ANTHROPIC_API_KEY  (without it the review is skipped with a notice)
 #   variable COPILOT_REF        full 40-character commit SHA of dev-growth-copilot.
-#                               Required: the review job holds the API key, so it must
-#                               not run code from a branch or tag that can move.
+#                               Required by both jobs that run its code; a branch or tag
+#                               could move. If it's missing or invalid, the guard fails
+#                               (fails closed) and says why.
 name: ai-review
 
 on:
@@ -29,21 +30,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guard:
+    name: injection guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check reviewer pin
+        id: ref
+        env:
+          COPILOT_REF: ${{ vars.COPILOT_REF }}
+        run: |
+          if [[ ! "$COPILOT_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set the repository variable COPILOT_REF to a full 40-character commit SHA of dev-growth-copilot (got '${COPILOT_REF}'). Branches and tags can move."
+            exit 1
+          fi
+          echo "sha=$COPILOT_REF" >> "$GITHUB_OUTPUT"
+
+      # The PR's code is checked out only to compute the diff. Nothing from it is run.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: pr
+          persist-credentials: false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: AlainAhuili/dev-growth-copilot
+          ref: ${{ steps.ref.outputs.sha }}
+          path: copilot
+          persist-credentials: false
+
+      - name: Diff of this PR
+        working-directory: pr
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git diff --no-color "origin/$BASE_REF" HEAD > "$RUNNER_TEMP/pr.diff"
+
+      # The guard is standard-library only, so it runs as a script: no install, no key,
+      # no model. -I keeps the working directory and environment out of the import path.
+      - name: Injection guard
+        working-directory: ${{ runner.temp }}
+        env:
+          GUARD: ${{ github.workspace }}/copilot/tools/injection_guard.py
+        run: python3 -I "$GUARD" pr.diff
+
   review:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     outputs:
       reviewed: ${{ steps.run.outputs.reviewed }}
     steps:
+      # Only a true/false reaches this step, never the key itself.
       - name: Check secret
         id: key
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
+          if [ "$HAS_KEY" != "true" ]; then
             echo "::notice::ANTHROPIC_API_KEY not set in this repo, skipping AI review"
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
@@ -57,12 +106,11 @@ jobs:
           COPILOT_REF: ${{ vars.COPILOT_REF }}
         run: |
           if [[ ! "$COPILOT_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Set the repository variable COPILOT_REF to a full 40-character commit SHA of dev-growth-copilot (got '${COPILOT_REF}'). Branches and tags can move, and this job holds the API key."
+            echo "::error::Set the repository variable COPILOT_REF to a full 40-character commit SHA of dev-growth-copilot (got '${COPILOT_REF}')."
             exit 1
           fi
           echo "sha=$COPILOT_REF" >> "$GITHUB_OUTPUT"
 
-      # The PR's code is checked out only to compute the diff. Nothing from it is run.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.key.outputs.present == 'true'
         with:
@@ -82,6 +130,7 @@ jobs:
         with:
           python-version: "3.13"
 
+      # Runs package build code from PyPI, so the key is deliberately not in reach here.
       # Editable, so the reviewer finds its agents/ configs and prompts in the checkout.
       - name: Install reviewer
         if: steps.key.outputs.present == 'true'
@@ -97,13 +146,14 @@ jobs:
           git diff --no-color "origin/$BASE_REF" HEAD > "$RUNNER_TEMP/pr.diff"
           echo "diff: $(wc -l < "$RUNNER_TEMP/pr.diff") lines"
 
-      # -I: isolated mode. The working directory is not on sys.path, so files in the PR
-      # (e.g. a planted reviewer/ or evals/ package) can't replace the reviewer's modules.
+      # The only step with the key. -I: the working directory is not on sys.path, so
+      # files in the PR (e.g. a planted reviewer/ package) can't replace the reviewer.
       - name: Review
         id: run
         if: steps.key.outputs.present == 'true'
         working-directory: ${{ runner.temp }}
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO: ${{ github.event.repository.name }}
           SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -150,15 +200,3 @@ jobs:
             gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@review/comment.md >/dev/null
             echo "posted new comment"
           fi
-
-      # The one deterministic gate: text in the diff that gives instructions to an AI.
-      - name: Injection guard
-        run: |
-          n=$(jq '[.findings[] | select(.category == "injection" and .source == "deterministic")] | length' review/findings.json)
-          if [ "$n" -gt 0 ]; then
-            jq -r '.findings[] | select(.category == "injection" and .source == "deterministic")
-                   | "::error file=\(.file | gsub("[^A-Za-z0-9._/-]"; "_")),line=\(.line)::text addressed to an AI reviewer"' \
-               review/findings.json
-            exit 1
-          fi
-          echo "no injection attempts"
