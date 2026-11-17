@@ -26,12 +26,13 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
       - run: pip install platformio
       - name: Build
-        run: pio run -d firmware
+        # tee keeps the log for the size report; pipefail (Actions default) keeps pio's exit code
+        run: pio run -d firmware | tee build.log
       - name: Flash and RAM usage
         run: |
           {
             echo '### Firmware size'
             echo '```'
-            pio run -d firmware -t size 2>/dev/null | grep -E '^(RAM|Flash):'
+            grep -E '^(RAM|Flash):' build.log || echo 'size lines not found in build output'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
