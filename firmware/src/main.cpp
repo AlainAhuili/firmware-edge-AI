@@ -103,17 +103,13 @@ void check_mpu6050() {
                                   : "MPU-6500-compatible clone (usable)");
 }
 
-}  // namespace
 
-void setup() {
-  Serial.begin(115200);
-  delay(1500);  // give the serial monitor time to attach after reset
-
+void run_board_check() {
+  g_checks_failed = 0;
   Serial.println();
   Serial.println("=== firmware-edge-AI board check ===");
   report_chip();
 
-  Wire.begin(board::kI2cSda, board::kI2cScl, board::kI2cFrequencyHz);
   scan_i2c_bus();
   if (i2c_device_present(board::kMpu6050Address)) {
     check_mpu6050();
@@ -123,11 +119,37 @@ void setup() {
 
   Serial.printf("=== %s: %d check(s) failed ===\n",
                 g_checks_failed == 0 ? "ALL PASSED" : "ATTENTION", g_checks_failed);
+  Serial.println("(press Enter in the serial monitor to run the check again)");
+}
+
+}  // namespace
+
+void setup() {
+  Serial.begin(115200);
+  // Over the native USB port the serial connection only exists once the PC has
+  // re-attached after reset. Wait up to 5 s for it, so the report isn't printed
+  // into the void; over the UART port Serial is ready at once.
+  const uint32_t start = millis();
+  while (!Serial && millis() - start < board::kSerialWaitMs) {
+    delay(10);
+  }
+
+  Wire.begin(board::kI2cSda, board::kI2cScl, board::kI2cFrequencyHz);
+  run_board_check();
 }
 
 void loop() {
-  // Green blink = running; red blink = a check failed. RGB_BUILTIN is the
-  // on-board WS2812 (GPIO 48 on DevKitC-1 v1.0, GPIO 38 on v1.1 boards).
+  // Any input from the serial monitor re-runs the check, so the report can be
+  // seen even if the monitor attached after the board started.
+  if (Serial.available() > 0) {
+    while (Serial.available() > 0) {
+      Serial.read();
+    }
+    run_board_check();
+  }
+
+  // Green blink = all checks passed; red blink = a check failed. RGB_BUILTIN is
+  // the on-board WS2812 (GPIO 48 on DevKitC-1 v1.0, GPIO 38 on v1.1 boards).
   const uint8_t red = g_checks_failed ? 40 : 0;
   const uint8_t green = g_checks_failed ? 0 : 40;
   neopixelWrite(RGB_BUILTIN, red, green, 0);

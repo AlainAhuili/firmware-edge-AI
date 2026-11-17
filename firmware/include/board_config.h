@@ -6,6 +6,9 @@
 
 namespace board {
 
+// How long setup() waits for the PC to open the USB serial port after reset.
+constexpr uint32_t kSerialWaitMs = 5000;
+
 // I2C bus shared by MPU-6050 (accelerometer), SSD1306 OLED and INA219.
 constexpr int kI2cSda = 8;
 constexpr int kI2cScl = 9;
