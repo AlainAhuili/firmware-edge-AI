@@ -1,0 +1,38 @@
+name: Firmware
+
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ESP32-S3 firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO toolchains
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install platformio
+      - name: Build
+        # tee keeps the log for the size report; pipefail (Actions default) keeps pio's exit code
+        run: pio run -d firmware | tee build.log
+      - name: Flash and RAM usage
+        run: |
+          {
+            echo '### Firmware size'
+            echo '```'
+            grep -E '^(RAM|Flash):' build.log || echo 'size lines not found in build output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
